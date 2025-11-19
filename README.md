@@ -117,7 +117,12 @@ fco2_recipe <- recipe(fco2 ~ .,
 bake(prep(fco2_recipe), new_data = NULL)
 ```
 
-## RANDOM FOREST
+## Lightgbm
+
+``` r
+# Instalar treesnip
+install.packages("catboost")
+```
 
 #### Definir os parâmetros da tunagem
 
@@ -126,9 +131,9 @@ fco2_rf_model <- rand_forest(
   min_n = tune(),
   mtry = tune(),
   trees = tune()
-)   %>%  
-  set_mode("regression")  %>% 
-  set_engine("randomForest")
+) %>%  
+  set_mode("regression") %>% 
+  set_engine("ranger", importance = "impurity")
 ```
 
 #### Workflow e tunagem
@@ -138,11 +143,11 @@ fco2_rf_wf <- workflow()   |>
   add_model(fco2_rf_model) |> 
   add_recipe(fco2_recipe)
 
-grid_rf <- grid_regular(
-  min_n(range = c(20, 30)),
-  mtry(range = c(5,10)),
-  trees(range = c(100,500) ),
-  levels = 2 #<-----------------------
+grid_rf <- grid_latin_hypercube(
+  min_n(range = c(1, 10)),
+  mtry(range = c(8, 20)),
+  trees(range = c(150, 200)),
+  size = 5
 )
 
 fco2_rf_tune_grid <- tune_grid( 
@@ -249,6 +254,228 @@ print(data.frame(vector_of_metrics))
 #> MAE          0.3259117
 #> MAPE        25.2042723
 ```
+
+<!-- ## RANDOM FOREST -->
+
+<!-- #### Definir os parâmetros da tunagem -->
+
+<!-- ```{r} -->
+
+<!-- fco2_rf_model <- rand_forest( -->
+
+<!--   min_n = tune(), -->
+
+<!--   mtry = tune(), -->
+
+<!--   trees = tune() -->
+
+<!-- )   %>%   -->
+
+<!--   set_mode("regression")  %>%  -->
+
+<!--   set_engine("randomForest") -->
+
+<!-- ``` -->
+
+<!-- #### Workflow e tunagem -->
+
+<!-- ```{r} -->
+
+<!-- fco2_rf_wf <- workflow()   |>  -->
+
+<!--   add_model(fco2_rf_model) |>  -->
+
+<!--   add_recipe(fco2_recipe) -->
+
+<!-- grid_rf <- grid_regular( -->
+
+<!--   min_n(range = c(20, 30)), -->
+
+<!--   mtry(range = c(5,10)), -->
+
+<!--   trees(range = c(100,500) ), -->
+
+<!--   levels = 2 #<----------------------- -->
+
+<!-- ) -->
+
+<!-- fco2_rf_tune_grid <- tune_grid(  -->
+
+<!--   fco2_rf_wf, -->
+
+<!--   resamples = fco2_resamples, -->
+
+<!--   grid = grid_rf, -->
+
+<!--   metrics = metric_set(rmse) ) -->
+
+<!-- autoplot(fco2_rf_tune_grid) -->
+
+<!-- ``` -->
+
+<!-- ### Coletando métricas -->
+
+<!-- ```{r} -->
+
+<!-- collect_metrics(fco2_rf_tune_grid) -->
+
+<!-- fco2_rf_tune_grid |>  -->
+
+<!--   show_best(metric = "rmse", n = 6) -->
+
+<!-- ``` -->
+
+<!-- ### Desempenho do modelo final -->
+
+<!-- ```{r} -->
+
+<!-- fco2_rf_best_params <- select_best(fco2_rf_tune_grid, metric = "rmse") -->
+
+<!-- fco2_rf_wf <- fco2_rf_wf |>  -->
+
+<!--   finalize_workflow(fco2_rf_best_params) -->
+
+<!-- fco2_rf_last_fit <- last_fit(fco2_rf_wf, fco2_initial_split) -->
+
+<!-- ## Criando os preditos -->
+
+<!-- fco2_test_preds <- bind_rows( -->
+
+<!--   collect_predictions(fco2_rf_last_fit)  |>  -->
+
+<!--     mutate(modelo = "rf")) -->
+
+<!-- fco2_test <- testing(fco2_initial_split) -->
+
+<!-- fco2_test_preds |>  -->
+
+<!--   ggplot(aes(x=.pred, y=fco2)) + -->
+
+<!--   geom_point()+ -->
+
+<!--   theme_bw() + -->
+
+<!--   geom_smooth(method = "lm") + -->
+
+<!--   stat_regline_equation(ggplot2::aes( -->
+
+<!--   label =  paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~~"))) + -->
+
+<!--   geom_abline (slope=1, linetype = "dashed", color="Red") -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- # Extract the actual training data from your workflow -->
+
+<!--  fco2_rf_last_fit_model <-fco2_rf_last_fit$.workflow[[1]]$fit$fit -->
+
+<!--  vip(fco2_rf_last_fit_model, -->
+
+<!--      aesthetics = list(color = "black", fill = "orange")) + -->
+
+<!--      theme(axis.text.y=element_text(size=rel(1.5)), -->
+
+<!--            axis.text.x=element_text(size=rel(1.5)), -->
+
+<!--            axis.title.x=element_text(size=rel(1.5)) -->
+
+<!--            ) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- importance_top_10 <- vi(fco2_rf_last_fit_model) |>  -->
+
+<!--   arrange(desc(Importance)) |>  -->
+
+<!--   slice(1:10) -->
+
+<!-- importance_top_10 |>  -->
+
+<!--   mutate(feature_type = case_when( -->
+
+<!--     Variable %in% physical_var   ~ "físicos", -->
+
+<!--     Variable %in% chemical_var  ~ "químicos", -->
+
+<!--     Variable %in% din_var ~ "dinâmicos", -->
+
+<!--     Variable %in% meteorological_var ~ "climáticos", -->
+
+<!--     Variable %in% orbital_var  ~ "orbitais", -->
+
+<!--     Variable %in% textural_var  ~ "textura", -->
+
+<!--     Variable %in% time_var  ~ "tempo", -->
+
+<!--     TRUE                        ~ "manejo" -->
+
+<!--   ), -->
+
+<!--   Variable = Variable |> fct_reorder(Importance)) |>  -->
+
+<!--   ggplot(aes(x=Importance, y=Variable, fill = feature_type)) + -->
+
+<!--   geom_col(color="black") + -->
+
+<!--   theme_bw()+ -->
+
+<!--   labs(x = "Importância",y="", -->
+
+<!--        fill="Grupo") + -->
+
+<!--   theme(legend.position = "top") + -->
+
+<!--   scale_fill_viridis_d() -->
+
+<!-- fco2_nn_last_fit_model$censor_probs |> str() -->
+
+<!-- ``` -->
+
+<!-- ### Principais Métricas -->
+
+<!-- ```{r}  -->
+
+<!-- da <- fco2_test_preds |>  -->
+
+<!--   filter(fco2 > 0, .pred > 0) -->
+
+<!-- my_r <- cor(da$fco2,da$.pred) -->
+
+<!-- my_r2 <- my_r*my_r -->
+
+<!-- my_mse <- Metrics::mse(da$fco2,da$.pred) -->
+
+<!-- my_rmse <- Metrics::rmse(da$fco2, -->
+
+<!--                          da$.pred) -->
+
+<!-- my_mae <- Metrics::mae(da$fco2,da$.pred) -->
+
+<!-- my_mape <- Metrics::mape(da$fco2,da$.pred)*100 -->
+
+<!-- vector_of_metrics <- c(r=my_r, R2=my_r2, MSE=my_mse, RMSE=my_rmse, MAE=my_mae, MAPE=my_mape) -->
+
+<!-- print(data.frame(vector_of_metrics)) -->
+
+<!-- #>      vector_of_metrics -->
+
+<!-- #> r            0.6787708 -->
+
+<!-- #> R2           0.4607298 -->
+
+<!-- #> MSE          0.1984555 -->
+
+<!-- #> RMSE         0.4454834 -->
+
+<!-- #> MAE          0.3259117 -->
+
+<!-- #> MAPE        25.2042723 -->
+
+<!-- ``` -->
 
 <!--
 &#10;## Decision TREE - DT
