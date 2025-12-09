@@ -117,97 +117,309 @@ fco2_recipe <- recipe(fco2 ~ .,
 bake(prep(fco2_recipe), new_data = NULL)
 ```
 
-## Lightgbm
+## Boosting gradient tree (xgb)
 
 ``` r
-# Instalar treesnip
-install.packages("catboost")
-```
+cores = 4
+fco2_xgb_model <- boost_tree(
+  mtry = 0.8,
+  trees = tune(), # <---------------
+  min_n = 5,
+  tree_depth = 4,
+  loss_reduction = 0, # lambda
+  learn_rate = tune(), # epsilon
+  sample_size = 0.8
+)  %>%
+  set_mode("regression")  %>%
+  set_engine("xgboost", nthread = cores, counts = FALSE)
 
-#### Definir os parâmetros da tunagem
-
-``` r
-fco2_rf_model <- rand_forest(
-  min_n = tune(),
-  mtry = tune(),
-  trees = tune()
-) %>%  
-  set_mode("regression") %>% 
-  set_engine("ranger", importance = "impurity")
-```
-
-#### Workflow e tunagem
-
-``` r
-fco2_rf_wf <- workflow()   |> 
-  add_model(fco2_rf_model) |> 
+fco2_xgb_wf <- workflow()  %>%
+  add_model(fco2_xgb_model) %>%
   add_recipe(fco2_recipe)
 
-grid_rf <- grid_latin_hypercube(
-  min_n(range = c(1, 10)),
-  mtry(range = c(8, 20)),
-  trees(range = c(150, 200)),
-  size = 5
+grid_xgb <- grid_regular(
+  learn_rate(range =  c(0.005, 0.3)), ## <---------
+  trees(range = c(3, 100)), ## <---------
+  levels = 2 
+)
+```
+
+#### Passo 1
+
+``` r
+fco2_xgb_tune_grid <- tune_grid(
+ fco2_xgb_wf,
+  resamples = fco2_resamples,
+  grid = grid_xgb,
+  metrics = metric_set(rmse)
+)
+autoplot(fco2_xgb_tune_grid)
+```
+
+``` r
+fco2_xgb_tune_grid   %>%   show_best(metric = "rmse", n = 5)
+```
+
+``` r
+fco2_xgb_select_best_passo1 <- fco2_xgb_tune_grid %>%
+  select_best(metric = "rmse")
+fco2_xgb_select_best_passo1
+```
+
+#### Passo 2
+
+``` r
+fco2_xgb_model <- boost_tree(
+  mtry = 0.8,
+  trees = fco2_xgb_select_best_passo1$trees,
+  min_n = tune(),
+  tree_depth = tune(),
+  loss_reduction = 0,
+  learn_rate = fco2_xgb_select_best_passo1$learn_rate,
+  sample_size = 0.8
+) %>%
+  set_mode("regression")  %>%
+  set_engine("xgboost", nthread = cores, counts = FALSE)
+
+#### Workflow
+fco2_xgb_wf <- workflow() %>%
+    add_model(fco2_xgb_model)   %>%
+    add_recipe(fco2_recipe)
+
+#### Grid
+fco2_xgb_grid <- grid_regular(
+  tree_depth(range = c(1, 4)), ## <---------
+  min_n(range = c(5, 60)), ## <---------
+  levels = 2 ## <---------
 )
 
-fco2_rf_tune_grid <- tune_grid( 
-  fco2_rf_wf,
-  resamples = fco2_resamples,
-  grid = grid_rf,
-  metrics = metric_set(rmse) )
-autoplot(fco2_rf_tune_grid)
+fco2_xgb_tune_grid <- fco2_xgb_wf   %>%
+  tune_grid(
+    resamples =fco2_resamples,
+    grid = fco2_xgb_grid,
+    control = control_grid(save_pred = TRUE, verbose = FALSE, allow_par = TRUE),
+    metrics = metric_set(rmse)
+  )
+
+#### Melhores hiperparâmetros
+autoplot(fco2_xgb_tune_grid)
 ```
 
-### Coletando métricas
-
 ``` r
-collect_metrics(fco2_rf_tune_grid)
-fco2_rf_tune_grid |> 
-  show_best(metric = "rmse", n = 6)
+fco2_xgb_tune_grid  %>%
+  show_best(metric = "rmse", n = 5)
+fco2_xgb_select_best_passo2 <- fco2_xgb_tune_grid  %>%
+  select_best(metric = "rmse")
+fco2_xgb_select_best_passo2
 ```
 
-### Desempenho do modelo final
+## Passo 3
 
 ``` r
-fco2_rf_best_params <- select_best(fco2_rf_tune_grid, metric = "rmse")
-fco2_rf_wf <- fco2_rf_wf |> 
-  finalize_workflow(fco2_rf_best_params)
-fco2_rf_last_fit <- last_fit(fco2_rf_wf, fco2_initial_split)
+fco2_xgb_model <- boost_tree(
+  mtry = 0.8,
+  trees = fco2_xgb_select_best_passo1$trees,
+  min_n = fco2_xgb_select_best_passo2$min_n,
+  tree_depth = fco2_xgb_select_best_passo2$tree_depth,
+  loss_reduction =tune(),
+  learn_rate = fco2_xgb_select_best_passo1$learn_rate,
+  sample_size = 0.8
+)  %>%
+  set_mode("regression")  %>%
+  set_engine("xgboost", nthread = cores, counts = FALSE)
 
-## Criando os preditos
+#### Workflow
+fco2_xgb_wf <- workflow()  %>%
+    add_model(fco2_xgb_model)  %>%
+    add_recipe(fco2_recipe)
+
+#### Grid
+fco2_xgb_grid <- grid_regular(
+  loss_reduction(range = c(0.01, 8)), ## <---------
+  levels = 2## <---------
+)
+
+fco2_xgb_tune_grid <- fco2_xgb_wf   %>%
+  tune_grid(
+    resamples = fco2_resamples,
+    grid = fco2_xgb_grid,
+    control = control_grid(save_pred = TRUE,
+                           verbose = FALSE,
+                           allow_par = TRUE),
+    metrics = metric_set(rmse)
+  )
+
+#### Melhores hiperparâmetros
+autoplot(fco2_xgb_tune_grid)
+```
+
+``` r
+fco2_xgb_tune_grid   %>%   show_best(metric = "rmse", n = 5)
+fco2_xgb_select_best_passo3 <- fco2_xgb_tune_grid %>% select_best(metric = "rmse")
+fco2_xgb_select_best_passo3
+```
+
+### Passo 4
+
+``` r
+fco2_xgb_model <- boost_tree(
+  mtry = tune(),
+  trees = fco2_xgb_select_best_passo1$trees,
+  min_n = fco2_xgb_select_best_passo2$min_n,
+  tree_depth = fco2_xgb_select_best_passo2$tree_depth,
+  loss_reduction = fco2_xgb_select_best_passo3$loss_reduction,
+  learn_rate = fco2_xgb_select_best_passo1$learn_rate,
+  sample_size = tune()
+)%>%
+  set_mode("regression")  |>
+  set_engine("xgboost", nthread = cores, counts = FALSE)
+
+#### Workflow
+fco2_xgb_wf <- workflow()  %>%
+    add_model(fco2_xgb_model)  %>%
+    add_recipe(fco2_recipe)
+
+#### Grid
+fco2_xgb_grid <- expand.grid(
+    sample_size = seq(0.5, 1.0, length.out = 2), ## <---------
+    mtry = seq(0.1, 1.0, length.out = 2) ## <---------
+)
+
+fco2_xgb_tune_grid <- fco2_xgb_wf   %>%
+  tune_grid(
+    resamples = fco2_resamples,
+    grid = fco2_xgb_grid,
+    control = control_grid(save_pred = TRUE,
+                           verbose = FALSE,
+                           allow_par = TRUE),
+    metrics = metric_set(rmse)
+  )
+
+autoplot(fco2_xgb_tune_grid)
+```
+
+``` r
+fco2_xgb_tune_grid  %>%
+  show_best(metric = "rmse", n = 5)
+fco2_xgb_select_best_passo4 <- fco2_xgb_tune_grid   %>%
+  select_best(metric = "rmse")
+fco2_xgb_select_best_passo4
+```
+
+### Passo 5
+
+``` r
+fco2_xgb_model <- boost_tree(
+  mtry = fco2_xgb_select_best_passo4$mtry,
+  trees = tune(),
+  min_n = fco2_xgb_select_best_passo2$min_n,
+  tree_depth = fco2_xgb_select_best_passo2$tree_depth,
+  loss_reduction = fco2_xgb_select_best_passo3$loss_reduction,
+  learn_rate = tune(),
+  sample_size = fco2_xgb_select_best_passo4$sample_size
+) %>%
+  set_mode("regression")  %>%
+  set_engine("xgboost", nthread = cores, counts = FALSE)
+
+#### Workflow
+fco2_xgb_wf <- workflow() %>%
+    add_model(fco2_xgb_model)  %>%
+    add_recipe(fco2_recipe)
+
+#### Grid
+fco2_xgb_grid <- expand.grid(
+    learn_rate = c(0.10, 0.15, 0.25, 0.50),
+    trees = c(100, 250, 500)
+)
+
+fco2_xgb_tune_grid <- fco2_xgb_wf   %>%
+  tune_grid(
+    resamples = fco2_resamples,
+    grid = fco2_xgb_grid,
+    control = control_grid(save_pred = TRUE,
+                           verbose = FALSE,
+                           allow_par = TRUE),
+    metrics = metric_set(rmse)
+  )
+
+#### Melhores hiperparâmetros
+autoplot(fco2_xgb_tune_grid)
+```
+
+``` r
+fco2_xgb_tune_grid  %>%
+  show_best(metric = "rmse", n = 5)
+fco2_xgb_select_best_passo5 <- fco2_xgb_tune_grid %>%
+  select_best(metric = "rmse")
+fco2_xgb_select_best_passo5
+```
+
+## Desempenho dos modelos finais
+
+``` r
+fco2_xgb_model <- boost_tree(
+  mtry = fco2_xgb_select_best_passo4$mtry,
+  trees = fco2_xgb_select_best_passo5$trees,
+  min_n = fco2_xgb_select_best_passo2$min_n,
+  tree_depth = fco2_xgb_select_best_passo2$tree_depth,
+  loss_reduction = fco2_xgb_select_best_passo3$loss_reduction,
+  learn_rate = fco2_xgb_select_best_passo5$learn_rate,
+  sample_size = fco2_xgb_select_best_passo4$sample_size
+) %>%
+  set_mode("regression")  %>%
+  set_engine("xgboost", nthread = cores, counts = FALSE)
+```
+
+``` r
+df <- data.frame(
+  mtry = fco2_xgb_select_best_passo4$mtry,
+  trees = fco2_xgb_select_best_passo5$trees,
+  min_n = fco2_xgb_select_best_passo2$min_n,
+  tree_depth = fco2_xgb_select_best_passo2$tree_depth,
+  loss_reduction = fco2_xgb_select_best_passo3$loss_reduction,
+  learn_rate = fco2_xgb_select_best_passo5$learn_rate,
+  sample_size = fco2_xgb_select_best_passo4$sample_size
+)
+fco2_xgb_wf <- fco2_xgb_wf %>% finalize_workflow(df) # <------
+fco2_xgb_last_fit <- last_fit(fco2_xgb_wf, fco2_initial_split) # <--------
+```
+
+## Criar Preditos
+
+``` r
 fco2_test_preds <- bind_rows(
-  collect_predictions(fco2_rf_last_fit)  |> 
-    mutate(modelo = "rf"))
+  collect_predictions(fco2_xgb_last_fit)  %>%
+    mutate(modelo = "xgb")
+)
+```
 
-fco2_test <- testing(fco2_initial_split)
-
-fco2_test_preds |> 
-  ggplot(aes(x=.pred, y=fco2)) +
+``` r
+fco2_test_preds %>%
+  ggplot(aes(x=.pred, y = fco2)) +
   geom_point()+
   theme_bw() +
   geom_smooth(method = "lm") +
   stat_regline_equation(ggplot2::aes(
-  label =  paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~~"))) +
+  label =  paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~~")))+
   geom_abline (slope=1, linetype = "dashed", color="Red")
 ```
 
 ``` r
-# Extract the actual training data from your workflow
- fco2_rf_last_fit_model <-fco2_rf_last_fit$.workflow[[1]]$fit$fit
- vip(fco2_rf_last_fit_model,
-     aesthetics = list(color = "black", fill = "orange")) +
-     theme(axis.text.y=element_text(size=rel(1.5)),
-           axis.text.x=element_text(size=rel(1.5)),
-           axis.title.x=element_text(size=rel(1.5))
-           )
+fco2_xgb_last_fit_model <-fco2_xgb_last_fit$.workflow[[1]]$fit$fit
+vip(fco2_xgb_last_fit_model,
+    aesthetics = list(color = "black", fill = "orange")) +
+    theme(axis.text.y=element_text(size=rel(1.5)),
+          axis.text.x=element_text(size=rel(1.5)),
+          axis.title.x=element_text(size=rel(1.5))
+          )
 ```
 
 ``` r
-importance_top_10 <- vi(fco2_rf_last_fit_model) |> 
-  arrange(desc(Importance)) |> 
+importance_top_10 <- vi(fco2_xgb_last_fit_model) |>
+  arrange(desc(Importance)) |>
   slice(1:10)
 
-importance_top_10 |> 
+importance_top_10 |>
   mutate(feature_type = case_when(
     Variable %in% physical_var   ~ "físicos",
     Variable %in% chemical_var  ~ "químicos",
@@ -218,7 +430,7 @@ importance_top_10 |>
     Variable %in% time_var  ~ "tempo",
     TRUE                        ~ "manejo"
   ),
-  Variable = Variable |> fct_reorder(Importance)) |> 
+  Variable = Variable |> fct_reorder(Importance)) |>
   ggplot(aes(x=Importance, y=Variable, fill = feature_type)) +
   geom_col(color="black") +
   theme_bw()+
@@ -226,15 +438,13 @@ importance_top_10 |>
        fill="Grupo") +
   theme(legend.position = "top") +
   scale_fill_viridis_d()
-
-fco2_nn_last_fit_model$censor_probs |> str()
 ```
 
-### Principais Métricas
+## Métricas
 
 ``` r
-da <- fco2_test_preds |> 
-  filter(fco2 > 0, .pred > 0)
+da <- fco2_test_preds %>%
+  filter(fco2 > 0, .pred>0 )
 
 my_r <- cor(da$fco2,da$.pred)
 my_r2 <- my_r*my_r
@@ -246,14 +456,229 @@ my_mape <- Metrics::mape(da$fco2,da$.pred)*100
 
 vector_of_metrics <- c(r=my_r, R2=my_r2, MSE=my_mse, RMSE=my_rmse, MAE=my_mae, MAPE=my_mape)
 print(data.frame(vector_of_metrics))
-#>      vector_of_metrics
-#> r            0.6787708
-#> R2           0.4607298
-#> MSE          0.1984555
-#> RMSE         0.4454834
-#> MAE          0.3259117
-#> MAPE        25.2042723
 ```
+
+<!-- ## Random Forest -->
+
+<!-- #### Definir os parâmetros da tunagem -->
+
+<!-- ```{r} -->
+
+<!-- fco2_rf_model <- rand_forest( -->
+
+<!--   min_n = tune(), -->
+
+<!--   mtry = tune(), -->
+
+<!--   trees = tune() -->
+
+<!-- ) %>%   -->
+
+<!--   set_mode("regression") %>%  -->
+
+<!--   set_engine("ranger", importance = "impurity") -->
+
+<!-- ``` -->
+
+<!-- #### Workflow e tunagem -->
+
+<!-- ```{r} -->
+
+<!-- fco2_rf_wf <- workflow()   |>  -->
+
+<!--   add_model(fco2_rf_model) |>  -->
+
+<!--   add_recipe(fco2_recipe) -->
+
+<!-- grid_rf <- grid_latin_hypercube( -->
+
+<!--   min_n(range = c(1, 10)), -->
+
+<!--   mtry(range = c(8, 20)), -->
+
+<!--   trees(range = c(150, 200)), -->
+
+<!--   size = 5 -->
+
+<!-- ) -->
+
+<!-- fco2_rf_tune_grid <- tune_grid(  -->
+
+<!--   fco2_rf_wf, -->
+
+<!--   resamples = fco2_resamples, -->
+
+<!--   grid = grid_rf, -->
+
+<!--   metrics = metric_set(rmse) ) -->
+
+<!-- autoplot(fco2_rf_tune_grid) -->
+
+<!-- ``` -->
+
+<!-- ### Coletando métricas -->
+
+<!-- ```{r} -->
+
+<!-- collect_metrics(fco2_rf_tune_grid) -->
+
+<!-- fco2_rf_tune_grid |>  -->
+
+<!--   show_best(metric = "rmse", n = 6) -->
+
+<!-- ``` -->
+
+<!-- ### Desempenho do modelo final -->
+
+<!-- ```{r} -->
+
+<!-- fco2_rf_best_params <- select_best(fco2_rf_tune_grid, metric = "rmse") -->
+
+<!-- fco2_rf_wf <- fco2_rf_wf |>  -->
+
+<!--   finalize_workflow(fco2_rf_best_params) -->
+
+<!-- fco2_rf_last_fit <- last_fit(fco2_rf_wf, fco2_initial_split) -->
+
+<!-- ## Criando os preditos -->
+
+<!-- fco2_test_preds <- bind_rows( -->
+
+<!--   collect_predictions(fco2_rf_last_fit)  |>  -->
+
+<!--     mutate(modelo = "rf")) -->
+
+<!-- fco2_test <- testing(fco2_initial_split) -->
+
+<!-- fco2_test_preds |>  -->
+
+<!--   ggplot(aes(x=.pred, y=fco2)) + -->
+
+<!--   geom_point()+ -->
+
+<!--   theme_bw() + -->
+
+<!--   geom_smooth(method = "lm") + -->
+
+<!--   stat_regline_equation(ggplot2::aes( -->
+
+<!--   label =  paste(..eq.label.., ..rr.label.., sep = "*plain(\",\")~~"))) + -->
+
+<!--   geom_abline (slope=1, linetype = "dashed", color="Red") -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- # Extract the actual training data from your workflow -->
+
+<!--  fco2_rf_last_fit_model <-fco2_rf_last_fit$.workflow[[1]]$fit$fit -->
+
+<!--  vip(fco2_rf_last_fit_model, -->
+
+<!--      aesthetics = list(color = "black", fill = "orange")) + -->
+
+<!--      theme(axis.text.y=element_text(size=rel(1.5)), -->
+
+<!--            axis.text.x=element_text(size=rel(1.5)), -->
+
+<!--            axis.title.x=element_text(size=rel(1.5)) -->
+
+<!--            ) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- importance_top_10 <- vi(fco2_rf_last_fit_model) |>  -->
+
+<!--   arrange(desc(Importance)) |>  -->
+
+<!--   slice(1:10) -->
+
+<!-- importance_top_10 |>  -->
+
+<!--   mutate(feature_type = case_when( -->
+
+<!--     Variable %in% physical_var   ~ "físicos", -->
+
+<!--     Variable %in% chemical_var  ~ "químicos", -->
+
+<!--     Variable %in% din_var ~ "dinâmicos", -->
+
+<!--     Variable %in% meteorological_var ~ "climáticos", -->
+
+<!--     Variable %in% orbital_var  ~ "orbitais", -->
+
+<!--     Variable %in% textural_var  ~ "textura", -->
+
+<!--     Variable %in% time_var  ~ "tempo", -->
+
+<!--     TRUE                        ~ "manejo" -->
+
+<!--   ), -->
+
+<!--   Variable = Variable |> fct_reorder(Importance)) |>  -->
+
+<!--   ggplot(aes(x=Importance, y=Variable, fill = feature_type)) + -->
+
+<!--   geom_col(color="black") + -->
+
+<!--   theme_bw()+ -->
+
+<!--   labs(x = "Importância",y="", -->
+
+<!--        fill="Grupo") + -->
+
+<!--   theme(legend.position = "top") + -->
+
+<!--   scale_fill_viridis_d() -->
+
+<!-- fco2_nn_last_fit_model$censor_probs |> str() -->
+
+<!-- ``` -->
+
+<!-- ### Principais Métricas -->
+
+<!-- ```{r}  -->
+
+<!-- da <- fco2_test_preds |>  -->
+
+<!--   filter(fco2 > 0, .pred > 0) -->
+
+<!-- my_r <- cor(da$fco2,da$.pred) -->
+
+<!-- my_r2 <- my_r*my_r -->
+
+<!-- my_mse <- Metrics::mse(da$fco2,da$.pred) -->
+
+<!-- my_rmse <- Metrics::rmse(da$fco2, -->
+
+<!--                          da$.pred) -->
+
+<!-- my_mae <- Metrics::mae(da$fco2,da$.pred) -->
+
+<!-- my_mape <- Metrics::mape(da$fco2,da$.pred)*100 -->
+
+<!-- vector_of_metrics <- c(r=my_r, R2=my_r2, MSE=my_mse, RMSE=my_rmse, MAE=my_mae, MAPE=my_mape) -->
+
+<!-- print(data.frame(vector_of_metrics)) -->
+
+<!-- #>      vector_of_metrics -->
+
+<!-- #> r            0.6787708 -->
+
+<!-- #> R2           0.4607298 -->
+
+<!-- #> MSE          0.1984555 -->
+
+<!-- #> RMSE         0.4454834 -->
+
+<!-- #> MAE          0.3259117 -->
+
+<!-- #> MAPE        25.2042723 -->
+
+<!-- ``` -->
 
 <!-- ## RANDOM FOREST -->
 
